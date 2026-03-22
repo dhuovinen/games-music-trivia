@@ -1,0 +1,63 @@
+{
+  "packId": "classic-rock-sampler",
+  "title": "Classic Rock Sampler",
+  "description": "A short starter pack with artist, song, and combined artist+song prompts for masked audio-first play.",
+  "theme": "Classic rock hooks",
+  "artistFocus": "Mixed artists",
+  "decade": "1970s-1980s",
+  "era": "Classic rock",
+  "genre": "Rock",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "artist",
+      "prompt": "Name the artist",
+      "youtubeUrl": "https://www.youtube.com/watch?v=fJ9rUzIMcZQ",
+      "startSeconds": 0,
+      "endSeconds": 10,
+      "mediaMode": "video",
+      "options": [
+        "Queen",
+        "Boston",
+        "Journey",
+        "Foreigner"
+      ],
+      "correctIndex": 0,
+      "displayMode": "audio_only"
+    },
+    {
+      "id": "q2",
+      "type": "song",
+      "prompt": "Name the song",
+      "youtubeUrl": "https://www.youtube.com/watch?v=Zi_XLOBDo_Y",
+      "startSeconds": 47,
+      "endSeconds": 57,
+      "mediaMode": "audio",
+      "options": [
+        "Beat It",
+        "Billie Jean",
+        "Thriller",
+        "Smooth Criminal"
+      ],
+      "correctIndex": 1,
+      "displayMode": "audio_only"
+    },
+    {
+      "id": "q3",
+      "type": "artist_song",
+      "prompt": "Name the artist and song",
+      "youtubeUrl": "https://www.youtube.com/watch?v=btPJPFnesV4",
+      "startSeconds": 59,
+      "endSeconds": 69,
+      "mediaMode": "video",
+      "options": [
+        "A-ha \u2014 Take On Me",
+        "Tears for Fears \u2014 Everybody Wants to Rule the World",
+        "Duran Duran \u2014 Hungry Like the Wolf",
+        "The Outfield \u2014 Your Love"
+      ],
+      "correctIndex": 0,
+      "displayMode": "video_visible"
+    }
+  ]
+}
