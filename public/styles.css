@@ -56,7 +56,7 @@ code { background: rgba(255,255,255,0.08); padding: 0.2rem 0.4rem; border-radius
   padding: 1.25rem;
   box-shadow: var(--shadow);
 }
-.hero, .editor-layout, .layout, .phone-shell { padding: 1.25rem; }
+.hero, .editor-layout, .layout, .phone-shell, .editor-page-stack { padding: 1.25rem; }
 .hero { max-width: 960px; margin: 1rem auto; }
 .hero h1 { font-size: clamp(2.2rem, 5vw, 4.2rem); margin: 0.6rem 0; }
 .hero-actions { display: flex; gap: 1rem; flex-wrap: wrap; }
@@ -66,7 +66,7 @@ code { background: rgba(255,255,255,0.08); padding: 0.2rem 0.4rem; border-radius
   gap: 1.25rem;
 }
 .sidebar { align-self: start; position: sticky; top: 1rem; }
-.main-stage, .phone-shell, .editor-side-stack { display: grid; gap: 1.25rem; }
+.main-stage, .phone-shell, .editor-side-stack, .editor-page-stack { display: grid; gap: 1.25rem; }
 .phone-shell { max-width: 760px; margin: 0 auto; }
 .editor-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr); gap: 1.25rem; }
 .question-panel { display: grid; gap: 1rem; }
@@ -139,6 +139,9 @@ code { background: rgba(255,255,255,0.08); padding: 0.2rem 0.4rem; border-radius
 .answer-button.selected { outline: 3px solid var(--good); }
 .actions, .toggle-group, .editor-toolbar { display: grid; gap: 0.75rem; }
 .upload-field input[type="file"] { margin-top: 0.6rem; }
+.quick-options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem; }
+.quick-editor-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.checkbox-readout { display: flex; gap: 0.5rem; align-items: center; white-space: nowrap; }
 .player-list, .ranking-list, .doc-list {
   margin: 0;
   padding-left: 1.2rem;
@@ -191,5 +194,5 @@ hr { border-color: rgba(255,255,255,0.08); }
   .sidebar { position: static; }
 }
 @media (max-width: 920px) {
-  .answers-grid, .podium-row { grid-template-columns: 1fr; }
+  .answers-grid, .podium-row, .quick-options-grid { grid-template-columns: 1fr; }
 }

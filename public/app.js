@@ -12,7 +12,10 @@ const state = {
   validation: null,
   selectedUploadName: '',
   clientId: null,
-  pollTimer: null
+  pollTimer: null,
+  quickPackOriginal: null,
+  quickPackDraft: null,
+  quickQuestionIndex: 0
 };
 
 const AI_PROMPT_TEMPLATE = `Generate a valid music-trivia quiz pack as strict JSON only. Do not include markdown fences or commentary.
@@ -122,11 +125,22 @@ function send(type, payload = {}) {
   });
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function setQuickPack(pack) {
+  state.quickPackOriginal = cloneJson(pack);
+  state.quickPackDraft = cloneJson(pack);
+  state.quickQuestionIndex = 0;
+}
+
 async function loadPackIntoEditor(packId) {
   const response = await fetch(`/api/packs/${encodeURIComponent(packId)}`);
   const data = await response.json();
   state.editorText = JSON.stringify(data.pack, null, 2);
   state.selectedUploadName = `${data.pack.title || packId}.json`;
+  setQuickPack(data.pack);
   render();
 }
 
@@ -362,6 +376,102 @@ function playerView() {
   `;
 }
 
+function quickQuestion() {
+  if (!state.quickPackDraft || !Array.isArray(state.quickPackDraft.questions)) return null;
+  return state.quickPackDraft.questions[state.quickQuestionIndex] || null;
+}
+
+function updateQuickQuestionField(field, value, optionIndex = null) {
+  const question = quickQuestion();
+  if (!question) return;
+  if (field === 'youtubeUrl') {
+    question.youtubeUrl = value;
+  }
+  if (field === 'option' && optionIndex !== null) {
+    question.options[optionIndex] = value;
+  }
+  question.manualReview = true;
+  state.editorText = JSON.stringify(state.quickPackDraft, null, 2);
+  render();
+}
+
+function previousQuickQuestion() {
+  state.quickQuestionIndex = Math.max(0, state.quickQuestionIndex - 1);
+  render();
+}
+
+function nextQuickQuestion() {
+  if (!state.quickPackDraft) return;
+  state.quickQuestionIndex = Math.min(state.quickPackDraft.questions.length - 1, state.quickQuestionIndex + 1);
+  render();
+}
+
+function discardQuickEdits() {
+  if (!state.quickPackOriginal) return;
+  state.quickPackDraft = cloneJson(state.quickPackOriginal);
+  state.editorText = JSON.stringify(state.quickPackDraft, null, 2);
+  render();
+}
+
+async function saveQuickPack() {
+  if (!state.quickPackDraft) return;
+  const response = await fetch(`/api/packs/${encodeURIComponent(state.quickPackDraft.packId)}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state.quickPackDraft)
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    state.error = data.error || (data.errors ? data.errors.join(', ') : 'Unable to save pack.');
+    render();
+    return;
+  }
+  state.error = '';
+  state.toast = 'Quick Pack changes saved.';
+  state.editorText = JSON.stringify(data.pack, null, 2);
+  state.selectedUploadName = `${data.pack.title || data.pack.packId}.json`;
+  setQuickPack(data.pack);
+  render();
+}
+
+function quickPackEditorPanel() {
+  if (!state.quickPackDraft || !Array.isArray(state.quickPackDraft.questions)) {
+    return '<section class="panel"><h2>Quick Pack Editor</h2><p class="muted">Load a valid pack to edit question URLs and answer choices question-by-question.</p></section>';
+  }
+  const question = quickQuestion();
+  if (!question) {
+    return '<section class="panel"><h2>Quick Pack Editor</h2><p class="muted">No questions available.</p></section>';
+  }
+  return `
+    <section class="panel">
+      <h2>Quick Pack Editor</h2>
+      <p class="muted">Editing pack: <strong>${escapeHtml(state.quickPackDraft.title)}</strong></p>
+      <div class="question-head">
+        <div>
+          <span class="badge">Question ${state.quickQuestionIndex + 1} / ${state.quickPackDraft.questions.length}</span>
+          <h3>${escapeHtml(question.prompt)}</h3>
+          <p class="muted">Correct answer slot stays fixed at option ${question.correctIndex + 1}. Start/end timing remain unchanged.</p>
+        </div>
+        <label class="checkbox-readout"><input type="checkbox" ${question.manualReview ? 'checked' : ''} disabled> Manually Reviewed</label>
+      </div>
+      <label>YouTube URL<input value="${escapeHtml(question.youtubeUrl)}" oninput="updateQuickQuestionField('youtubeUrl', this.value)"></label>
+      <div class="quick-options-grid">
+        ${question.options.map((option, index) => `
+          <label>Answer ${index + 1}${question.correctIndex === index ? ' (Correct slot)' : ''}
+            <input value="${escapeHtml(option)}" oninput="updateQuickQuestionField('option', this.value, ${index})">
+          </label>
+        `).join('')}
+      </div>
+      <div class="quick-editor-actions">
+        <button onclick="previousQuickQuestion()" ${state.quickQuestionIndex === 0 ? 'disabled' : ''}>Previous question</button>
+        <button onclick="nextQuickQuestion()" ${state.quickQuestionIndex >= state.quickPackDraft.questions.length - 1 ? 'disabled' : ''}>Next question</button>
+        <button onclick="discardQuickEdits()">Cancel / Discard</button>
+        <button class="primary" onclick="saveQuickPack()">Save / Commit</button>
+      </div>
+    </section>
+  `;
+}
+
 function editorDocsPanel() {
   return `
     <section class="panel docs-panel">
@@ -370,7 +480,7 @@ function editorDocsPanel() {
       <ul class="doc-list">
         <li><strong>Required root fields:</strong> <code>packId</code>, <code>title</code>, <code>description</code>, <code>theme</code>, <code>artistFocus</code>, <code>decade</code>, <code>era</code>, <code>genre</code>, <code>questions</code></li>
         <li><strong>Required question fields:</strong> <code>id</code>, <code>type</code>, <code>prompt</code>, <code>youtubeUrl</code>, <code>startSeconds</code>, <code>endSeconds</code>, <code>options</code>, <code>correctIndex</code></li>
-        <li><strong>Optional question fields:</strong> <code>mediaMode</code> (<code>audio</code> or <code>video</code>) and <code>displayMode</code> (<code>audio_only</code> or <code>video_visible</code>)</li>
+        <li><strong>Optional question fields:</strong> <code>mediaMode</code> (<code>audio</code> or <code>video</code>), <code>displayMode</code> (<code>audio_only</code> or <code>video_visible</code>), and <code>manualReview</code> (boolean)</li>
         <li><strong>Question rules:</strong> 4 options exactly, 1 correct answer, clip duration max 10 seconds, type must be <code>artist</code>, <code>song</code>, or <code>artist_song</code>.</li>
       </ul>
       <h3>AI prompt template</h3>
@@ -384,26 +494,29 @@ function editorView() {
   const server = state.server;
   const packOptions = server ? server.packs.map((pack) => `<option value="${pack.packId}">${escapeHtml(pack.title)}</option>`).join('') : '';
   return `
-    <div class="editor-layout">
-      <section class="panel">
-        <h1>Pack editor</h1>
-        <p class="muted">Repository-backed JSON remains the source of truth. This editor validates, uploads, and previews final playable packs before you save them into <code>data/packs</code>.</p>
-        <div class="editor-toolbar">
-          <label>Load sample pack<select onchange="loadPackIntoEditor(this.value)">${packOptions}</select></label>
-          <label class="upload-field">Import JSON file<input type="file" accept="application/json,.json" onchange="handlePackUpload(event)"></label>
-          <button onclick="validatePackJson()">Validate JSON</button>
-          <button onclick="downloadPackJson()">Download JSON</button>
-        </div>
-        ${state.selectedUploadName ? `<p class="muted">Current editor source: ${escapeHtml(state.selectedUploadName)}</p>` : ''}
-        <textarea class="editor" oninput="state.editorText=this.value">${escapeHtml(state.editorText)}</textarea>
-      </section>
-      <section class="editor-side-stack">
+    <div class="editor-page-stack">
+      ${quickPackEditorPanel()}
+      <div class="editor-layout">
         <section class="panel">
-          <h2>Validation</h2>
-          ${state.validation ? (state.validation.valid ? '<p class="success">Pack is valid and ready for ingestion.</p>' : `<ul class="error-list">${state.validation.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`) : '<p class="muted">Run validation or upload a JSON file to see schema feedback.</p>'}
+          <h1>Pack editor</h1>
+          <p class="muted">Repository-backed JSON remains the source of truth. This editor validates, uploads, previews, and now supports quick question-level edits for URL and answer choice review before you save them into <code>data/packs</code>.</p>
+          <div class="editor-toolbar">
+            <label>Load sample pack<select onchange="loadPackIntoEditor(this.value)">${packOptions}</select></label>
+            <label class="upload-field">Import JSON file<input type="file" accept="application/json,.json" onchange="handlePackUpload(event)"></label>
+            <button onclick="validatePackJson()">Validate JSON</button>
+            <button onclick="downloadPackJson()">Download JSON</button>
+          </div>
+          ${state.selectedUploadName ? `<p class="muted">Current editor source: ${escapeHtml(state.selectedUploadName)}</p>` : ''}
+          <textarea class="editor" oninput="state.editorText=this.value">${escapeHtml(state.editorText)}</textarea>
         </section>
-        ${editorDocsPanel()}
-      </section>
+        <section class="editor-side-stack">
+          <section class="panel">
+            <h2>Validation</h2>
+            ${state.validation ? (state.validation.valid ? '<p class="success">Pack is valid and ready for ingestion.</p>' : `<ul class="error-list">${state.validation.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`) : '<p class="muted">Run validation or upload a JSON file to see schema feedback.</p>'}
+          </section>
+          ${editorDocsPanel()}
+        </section>
+      </div>
     </div>
   `;
 }
@@ -503,6 +616,12 @@ async function handlePackUpload(event) {
   if (!file) return;
   state.selectedUploadName = file.name;
   state.editorText = await file.text();
+  try {
+    setQuickPack(JSON.parse(state.editorText));
+  } catch (error) {
+    state.quickPackOriginal = null;
+    state.quickPackDraft = null;
+  }
   await validatePackJson();
 }
 
@@ -533,3 +652,8 @@ window.validatePackJson = validatePackJson;
 window.downloadPackJson = downloadPackJson;
 window.loadPackIntoEditor = loadPackIntoEditor;
 window.handlePackUpload = handlePackUpload;
+window.updateQuickQuestionField = updateQuickQuestionField;
+window.previousQuickQuestion = previousQuickQuestion;
+window.nextQuickQuestion = nextQuickQuestion;
+window.discardQuickEdits = discardQuickEdits;
+window.saveQuickPack = saveQuickPack;

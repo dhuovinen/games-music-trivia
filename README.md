@@ -295,7 +295,7 @@ npm start
 ## Quiz pack workflow
 
 - Put committed pack JSON files into `data/packs/`.
-- Use the in-app **Pack editor** screen to inspect, validate, import, and export JSON.
+- Use the in-app **Pack editor** screen to inspect, validate, import, export, and quick-edit selected question fields.
 - Repo JSON files remain the source of truth for live sessions.
 
 ### How to load a new quiz pack for actual gameplay
@@ -322,7 +322,7 @@ If you want to test a pack before saving it into `data/packs/`:
 4. Review any validation errors.
 5. If valid, save that JSON file into `data/packs/` and restart the server to make it selectable for gameplay.
 
-Important: importing JSON in the browser validates and previews it, but does not automatically persist it to the server's `data/packs/` directory.
+Important: importing JSON in the browser validates and previews it, but does not automatically persist it to the server's `data/packs/` directory unless you use the Quick Pack Editor save flow for an existing repo-backed pack.
 
 ## Validation
 
@@ -345,3 +345,4 @@ npm run check
 - Pack JSON uses the root `title` as the playlist name, and questions can define `displayMode` values such as `audio_only` or `video_visible`.
 - The pack editor is intended to support both pasted JSON and uploaded `.json` files, plus an AI prompt template for generating the final pack format directly.
 - The browser now fetches initial state over HTTP and can fall back to HTTP polling/actions if a phone browser has trouble maintaining the WebSocket connection.
+- The Quick Pack Editor can overwrite an existing repo-backed pack file, editing only `youtubeUrl` and answer options while automatically setting question-level `manualReview` to `true` when a question is changed.

@@ -60,6 +60,9 @@ function validatePack(pack) {
     if (!['artist', 'song', 'artist_song'].includes(question.type)) {
       errors.push(`${prefix}: type must be artist, song, or artist_song`);
     }
+    if ('manualReview' in question && typeof question.manualReview !== 'boolean') {
+      errors.push(`${prefix}: manualReview must be boolean when provided.`);
+    }
     if (question.displayMode && !['audio_only', 'video_visible'].includes(question.displayMode)) {
       errors.push(`${prefix}: displayMode must be audio_only or video_visible when provided.`);
     }
@@ -94,6 +97,7 @@ function loadPacks() {
     if (!parsed.ok) continue;
     const validation = validatePack(parsed.value);
     if (!validation.valid) continue;
+    parsed.value.__filePath = fullPath;
     packs.push(parsed.value);
   }
   return packs;
@@ -113,6 +117,10 @@ function getPackSummary(pack) {
     genre: pack.genre,
     questionCount: pack.questions.length
   };
+}
+
+function sanitizePackForWrite(pack) {
+  return JSON.parse(JSON.stringify(pack, (key, value) => (key === '__filePath' ? undefined : value)));
 }
 
 const session = {
@@ -513,7 +521,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && requestUrl.pathname.startsWith('/api/packs/')) {
     const packId = decodeURIComponent(requestUrl.pathname.split('/').pop());
     const pack = packs.find((entry) => entry.packId === packId);
-    return pack ? sendJson(res, 200, { pack }) : sendJson(res, 404, { error: 'Pack not found' });
+    return pack ? sendJson(res, 200, { pack: sanitizePackForWrite(pack) }) : sendJson(res, 404, { error: 'Pack not found' });
   }
   if (req.method === 'POST' && requestUrl.pathname === '/api/action') {
     try {
@@ -528,6 +536,31 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: result.error, state: buildStateFor(clientId) });
       }
       return sendJson(res, 200, { ok: true, state: buildStateFor(clientId) });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: error.message });
+    }
+  }
+  if (req.method === 'POST' && requestUrl.pathname.startsWith('/api/packs/') && requestUrl.pathname.endsWith('/save')) {
+    try {
+      const packId = decodeURIComponent(requestUrl.pathname.split('/')[3]);
+      const existingPack = packs.find((entry) => entry.packId === packId);
+      if (!existingPack || !existingPack.__filePath) {
+        return sendJson(res, 404, { ok: false, error: 'Pack not found' });
+      }
+      const body = await readBody(req);
+      const parsed = safeJsonParse(body);
+      if (!parsed.ok) {
+        return sendJson(res, 400, { ok: false, error: parsed.error });
+      }
+      const incomingPack = parsed.value;
+      incomingPack.packId = existingPack.packId;
+      const validation = validatePack(incomingPack);
+      if (!validation.valid) {
+        return sendJson(res, 400, { ok: false, errors: validation.errors });
+      }
+      fs.writeFileSync(existingPack.__filePath, `${JSON.stringify(sanitizePackForWrite(incomingPack), null, 2)}\n`, 'utf8');
+      packs = loadPacks();
+      return sendJson(res, 200, { ok: true, pack: sanitizePackForWrite(packs.find((entry) => entry.packId === packId)) });
     } catch (error) {
       return sendJson(res, 400, { ok: false, error: error.message });
     }
