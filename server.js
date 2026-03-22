@@ -141,6 +141,14 @@ const session = {
 
 const clients = new Map();
 
+function ensureClient(clientId) {
+  if (!clientId) return null;
+  if (!clients.has(clientId)) {
+    clients.set(clientId, { socket: null, role: 'viewer' });
+  }
+  return clients.get(clientId);
+}
+
 function getSelectedPack() {
   return packs.find((pack) => pack.packId === session.selectedPackId) || null;
 }
@@ -223,7 +231,9 @@ function getClientQuestionState(clientId) {
 
 function broadcastState() {
   for (const [clientId, client] of clients.entries()) {
-    sendMessage(client.socket, { type: 'state', payload: buildStateFor(clientId) });
+    if (client.socket) {
+      sendMessage(client.socket, { type: 'state', payload: buildStateFor(clientId) });
+    }
   }
 }
 
@@ -352,8 +362,10 @@ function endSession() {
 }
 
 function handleAction(clientId, message) {
-  const client = clients.get(clientId);
-  if (!client) return;
+  const client = ensureClient(clientId);
+  if (!client) {
+    return { error: 'Client id is required.' };
+  }
   switch (message.type) {
     case 'join_host': {
       session.hostClientId = clientId;
@@ -365,25 +377,20 @@ function handleAction(clientId, message) {
       const name = String(message.name || '').trim().slice(0, 24);
       const providedKey = String(message.sessionKey || '').trim();
       if (!name) {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Name is required.' } });
-        return;
+        return { error: 'Name is required.' };
       }
       if (session.settings.requireJoinKey && providedKey !== session.key) {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Invalid session key.' } });
-        return;
+        return { error: 'Invalid session key.' };
       }
       if (session.status !== 'lobby') {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Game already started. Late joiners are disabled.' } });
-        return;
+        return { error: 'Game already started. Late joiners are disabled.' };
       }
       if (session.players.length >= 8) {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Session is full.' } });
-        return;
+        return { error: 'Session is full.' };
       }
       const existing = session.players.find((player) => player.name.toLowerCase() === name.toLowerCase());
       if (existing) {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Player name must be unique for this session.' } });
-        return;
+        return { error: 'Player name must be unique for this session.' };
       }
       const player = { id: crypto.randomUUID(), clientId, name, score: 0, currentAnswer: null, answeredAt: null };
       session.players.push(player);
@@ -391,14 +398,14 @@ function handleAction(clientId, message) {
       break;
     }
     case 'set_pack': {
-      if (session.hostClientId !== clientId || session.status !== 'lobby') return;
+      if (session.hostClientId !== clientId || session.status !== 'lobby') return { ok: true };
       if (packs.some((pack) => pack.packId === message.packId)) {
         session.selectedPackId = message.packId;
       }
       break;
     }
     case 'update_settings': {
-      if (session.hostClientId !== clientId || session.status !== 'lobby') return;
+      if (session.hostClientId !== clientId || session.status !== 'lobby') return { ok: true };
       const requestedMax = Number(message.maxQuestions);
       session.settings = {
         playbackMode: message.playbackMode === 'player_device' ? 'player_device' : 'host_shared',
@@ -410,50 +417,51 @@ function handleAction(clientId, message) {
       break;
     }
     case 'start_game': {
-      if (session.hostClientId !== clientId || session.status !== 'lobby') return;
+      if (session.hostClientId !== clientId || session.status !== 'lobby') return { ok: true };
       const pack = getSelectedPack();
-      if (!pack || session.players.length === 0) return;
+      if (!pack || session.players.length === 0) return { ok: true };
       session.players.forEach((player) => { player.score = 0; });
       session.questionSet = chooseQuestionSet(pack);
       startQuestion(0);
-      return;
+      return { ok: true };
     }
     case 'submit_answer': {
-      if (!session.round || !session.round.acceptingAnswers || session.status !== 'question') return;
+      if (!session.round || !session.round.acceptingAnswers || session.status !== 'question') return { ok: true };
       const player = session.players.find((entry) => entry.clientId === clientId);
-      if (!player || player.answeredAt) return;
+      if (!player || player.answeredAt) return { ok: true };
       const now = Date.now();
-      if (now > session.round.startedAt + session.round.durationMs) return;
+      if (now > session.round.startedAt + session.round.durationMs) return { ok: true };
       player.currentAnswer = Number(message.optionIndex);
       player.answeredAt = now;
       break;
     }
     case 'skip_question': {
-      if (session.hostClientId !== clientId || session.status !== 'question') return;
+      if (session.hostClientId !== clientId || session.status !== 'question') return { ok: true };
       closeQuestion(true);
-      return;
+      return { ok: true };
     }
     case 'end_session': {
-      if (session.hostClientId !== clientId) return;
+      if (session.hostClientId !== clientId) return { ok: true };
       endSession();
-      return;
+      return { ok: true };
     }
     case 'leave_lobby': {
-      if (session.status !== 'lobby') return;
+      if (session.status !== 'lobby') return { ok: true };
       session.players = session.players.filter((player) => player.clientId !== clientId);
       client.role = 'viewer';
       break;
     }
     case 'reset_lobby': {
-      if (session.hostClientId !== clientId) return;
+      if (session.hostClientId !== clientId) return { ok: true };
       session.key = makeSessionKey();
       resetSession(true);
       break;
     }
     default:
-      return;
+      return { ok: true };
   }
   broadcastState();
+  return { ok: true };
 }
 
 function sendJson(res, statusCode, payload) {
@@ -495,7 +503,8 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === 'GET' && requestUrl.pathname === '/api/state') {
-    return sendJson(res, 200, buildStateFor(null));
+    const clientId = requestUrl.searchParams.get('clientId');
+    return sendJson(res, 200, buildStateFor(clientId));
   }
   if (req.method === 'GET' && requestUrl.pathname === '/api/packs') {
     packs = loadPacks();
@@ -505,6 +514,23 @@ const server = http.createServer(async (req, res) => {
     const packId = decodeURIComponent(requestUrl.pathname.split('/').pop());
     const pack = packs.find((entry) => entry.packId === packId);
     return pack ? sendJson(res, 200, { pack }) : sendJson(res, 404, { error: 'Pack not found' });
+  }
+  if (req.method === 'POST' && requestUrl.pathname === '/api/action') {
+    try {
+      const clientId = requestUrl.searchParams.get('clientId');
+      const body = await readBody(req);
+      const parsed = safeJsonParse(body);
+      if (!parsed.ok) {
+        return sendJson(res, 400, { ok: false, error: parsed.error });
+      }
+      const result = handleAction(clientId, parsed.value);
+      if (result && result.error) {
+        return sendJson(res, 400, { ok: false, error: result.error, state: buildStateFor(clientId) });
+      }
+      return sendJson(res, 200, { ok: true, state: buildStateFor(clientId) });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: error.message });
+    }
   }
   if (req.method === 'POST' && requestUrl.pathname === '/api/validate-pack') {
     try {
@@ -589,7 +615,8 @@ function sendMessage(socket, payload) {
 }
 
 server.on('upgrade', (req, socket) => {
-  if (req.url !== '/ws') {
+  const upgradeUrl = new URL(req.url, `http://${req.headers.host}`);
+  if (upgradeUrl.pathname !== '/ws') {
     socket.destroy();
     return;
   }
@@ -608,8 +635,9 @@ server.on('upgrade', (req, socket) => {
     ''
   ].join('\r\n'));
 
-  const clientId = crypto.randomUUID();
-  clients.set(clientId, { socket, role: 'viewer' });
+  const clientId = upgradeUrl.searchParams.get('clientId') || crypto.randomUUID();
+  const existingClient = ensureClient(clientId) || { role: 'viewer' };
+  clients.set(clientId, { ...existingClient, socket });
   sendMessage(socket, { type: 'state', payload: buildStateFor(clientId) });
 
   let buffer = Buffer.alloc(0);
@@ -624,7 +652,10 @@ server.on('upgrade', (req, socket) => {
       }
       const parsed = safeJsonParse(message.text);
       if (parsed.ok) {
-        handleAction(clientId, parsed.value);
+        const result = handleAction(clientId, parsed.value);
+        if (result && result.error) {
+          sendMessage(socket, { type: 'error', payload: { message: result.error } });
+        }
       }
     });
   });

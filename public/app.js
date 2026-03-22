@@ -10,7 +10,9 @@ const state = {
   sessionKeyInput: '',
   editorText: '',
   validation: null,
-  selectedUploadName: ''
+  selectedUploadName: '',
+  clientId: null,
+  pollTimer: null
 };
 
 const AI_PROMPT_TEMPLATE = `Generate a valid music-trivia quiz pack as strict JSON only. Do not include markdown fences or commentary.
@@ -31,10 +33,44 @@ Requirements:
 Create a pack for: {{REQUEST}}
 Use a fun but concise description and ensure all ids are unique.`;
 
+function getClientId() {
+  if (state.clientId) return state.clientId;
+  const stored = localStorage.getItem('musicTriviaClientId');
+  if (stored) {
+    state.clientId = stored;
+    return stored;
+  }
+  const created = (crypto && crypto.randomUUID) ? crypto.randomUUID() : `client-${Date.now()}`;
+  localStorage.setItem('musicTriviaClientId', created);
+  state.clientId = created;
+  return created;
+}
+
+async function fetchState() {
+  const response = await fetch(`/api/state?clientId=${encodeURIComponent(getClientId())}`);
+  const payload = await response.json();
+  state.server = payload;
+  if (!state.editorText && payload.packs && payload.packs[0]) {
+    await loadPackIntoEditor(payload.packs[0].packId);
+  }
+  render();
+}
+
+function startPolling() {
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(() => {
+    fetchState().catch(() => {});
+  }, 1500);
+}
+
 function connectSocket() {
-  if (state.socket) return;
+  fetchState().catch(() => {
+    state.error = 'Unable to fetch initial server state.';
+    render();
+  });
+  startPolling();
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${protocol}://${location.host}/ws`);
+  const socket = new WebSocket(`${protocol}://${location.host}/ws?clientId=${encodeURIComponent(getClientId())}`);
   socket.addEventListener('message', async (event) => {
     const message = JSON.parse(event.data);
     if (message.type === 'state') {
@@ -51,15 +87,39 @@ function connectSocket() {
   });
   socket.addEventListener('close', () => {
     state.socket = null;
-    state.error = 'Connection closed. Refresh to reconnect.';
     render();
   });
-  state.socket = socket;
+  socket.addEventListener('open', () => {
+    state.socket = socket;
+    fetchState().catch(() => {});
+  });
+}
+
+async function sendHttpAction(type, payload = {}) {
+  const response = await fetch(`/api/action?clientId=${encodeURIComponent(getClientId())}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, ...payload })
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    state.error = data.error || 'Request failed.';
+  } else {
+    state.error = '';
+    state.server = data.state;
+  }
+  render();
 }
 
 function send(type, payload = {}) {
-  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
-  state.socket.send(JSON.stringify({ type, ...payload }));
+  if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+    state.socket.send(JSON.stringify({ type, ...payload }));
+    return;
+  }
+  sendHttpAction(type, payload).catch(() => {
+    state.error = 'Unable to reach the local game server.';
+    render();
+  });
 }
 
 async function loadPackIntoEditor(packId) {

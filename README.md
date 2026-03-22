@@ -295,8 +295,34 @@ npm start
 ## Quiz pack workflow
 
 - Put committed pack JSON files into `data/packs/`.
-- Use the in-app **Pack editor** screen to inspect, validate, and export JSON.
+- Use the in-app **Pack editor** screen to inspect, validate, import, and export JSON.
 - Repo JSON files remain the source of truth for live sessions.
+
+### How to load a new quiz pack for actual gameplay
+
+If you want a new pack to appear in the host's pack dropdown and be playable in a live session, use these steps:
+
+1. Create or obtain a valid pack JSON file.
+2. Save that file into `data/packs/` inside the repo.
+3. Restart the server with `npm start`.
+4. Open the host screen in the browser.
+5. In **Host**, open the **Quiz pack** dropdown.
+6. Select the new pack by its JSON `title`.
+7. Start the game.
+
+The host dropdown reads packs from the server-side files in `data/packs/`, not directly from browser memory.
+
+### How to inspect or validate a new pack in the browser first
+
+If you want to test a pack before saving it into `data/packs/`:
+
+1. Open **Pack editor** in the browser.
+2. Use **Import JSON file** or paste JSON into the editor.
+3. The editor immediately replaces the current contents and validates the uploaded JSON.
+4. Review any validation errors.
+5. If valid, save that JSON file into `data/packs/` and restart the server to make it selectable for gameplay.
+
+Important: importing JSON in the browser validates and previews it, but does not automatically persist it to the server's `data/packs/` directory.
 
 ## Validation
 
@@ -318,3 +344,4 @@ npm run check
 - Player UI is intended to switch into a cleaner joined-player lobby/game view after login.
 - Pack JSON uses the root `title` as the playlist name, and questions can define `displayMode` values such as `audio_only` or `video_visible`.
 - The pack editor is intended to support both pasted JSON and uploaded `.json` files, plus an AI prompt template for generating the final pack format directly.
+- The browser now fetches initial state over HTTP and can fall back to HTTP polling/actions if a phone browser has trouble maintaining the WebSocket connection.
