@@ -1,5 +1,17 @@
 # Music Trivia Game Requirements and Working Notes
 
+## Revision notes after V1 feedback
+
+The next iteration expands the original V1 requirements with these decisions:
+
+- Join-key enforcement becomes an admin toggle and defaults to off.
+- Players should see a cleaner, player-specific lobby/game interface after joining.
+- Players may leave and rejoin the lobby, but not rename in-place.
+- Admin can set a max-question count; if the selected pack is larger, the server should choose a unique random subset at game start while preserving original pack order.
+- Pack JSON should document that the playlist name comes from the root `title` field.
+- The pack editor should support pasted JSON and uploaded `.json` files, immediately validate imports, and include an AI prompt template that generates the final playable pack format directly.
+- Audio-only masked playback becomes the default, and video hiding should support both question-level defaults and a host/session override.
+
 ## Why embedded YouTube is the V1 choice
 
 The earlier option analysis compared three ways to handle YouTube-sourced content:

@@ -1,7 +1,7 @@
 {
   "packId": "classic-rock-sampler",
   "title": "Classic Rock Sampler",
-  "description": "A short starter pack with artist, song, and combined artist+song prompts for shared-screen play.",
+  "description": "A short starter pack with artist, song, and combined artist+song prompts for masked audio-first play.",
   "theme": "Classic rock hooks",
   "artistFocus": "Mixed artists",
   "decade": "1970s-1980s",
@@ -16,8 +16,14 @@
       "startSeconds": 0,
       "endSeconds": 10,
       "mediaMode": "video",
-      "options": ["Queen", "Boston", "Journey", "Foreigner"],
-      "correctIndex": 0
+      "options": [
+        "Queen",
+        "Boston",
+        "Journey",
+        "Foreigner"
+      ],
+      "correctIndex": 0,
+      "displayMode": "audio_only"
     },
     {
       "id": "q2",
@@ -27,8 +33,14 @@
       "startSeconds": 47,
       "endSeconds": 57,
       "mediaMode": "audio",
-      "options": ["Beat It", "Billie Jean", "Thriller", "Smooth Criminal"],
-      "correctIndex": 1
+      "options": [
+        "Beat It",
+        "Billie Jean",
+        "Thriller",
+        "Smooth Criminal"
+      ],
+      "correctIndex": 1,
+      "displayMode": "audio_only"
     },
     {
       "id": "q3",
@@ -39,12 +51,13 @@
       "endSeconds": 69,
       "mediaMode": "video",
       "options": [
-        "A-ha — Take On Me",
-        "Tears for Fears — Everybody Wants to Rule the World",
-        "Duran Duran — Hungry Like the Wolf",
-        "The Outfield — Your Love"
+        "A-ha \u2014 Take On Me",
+        "Tears for Fears \u2014 Everybody Wants to Rule the World",
+        "Duran Duran \u2014 Hungry Like the Wolf",
+        "The Outfield \u2014 Your Love"
       ],
-      "correctIndex": 0
+      "correctIndex": 0,
+      "displayMode": "video_visible"
     }
   ]
 }

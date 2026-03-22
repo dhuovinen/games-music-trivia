@@ -4,12 +4,12 @@ A local-intranet, Kahoot-style music trivia game built for a single shared host 
 
 ## Features
 
-- Single host-controlled live session with a 6-digit join key.
+- Single host-controlled live session with optional join-key enforcement (off by default).
 - Up to 8 players with session-only nicknames.
-- Shared-screen or player-device YouTube embed playback modes.
+- Shared-screen or player-device YouTube playback modes with masked audio-first playback by default.
 - Ten-second answer windows with authoritative server timing and tenths-of-a-second scoring.
 - Optional leaderboard after every question and final podium at the end of the game.
-- Repository-backed JSON quiz packs with a browser-based validation/editor view.
+- Repository-backed JSON quiz packs with browser-based validation, upload, and AI-prompt authoring guidance.
 
 ## Project structure
 
@@ -309,3 +309,12 @@ npm run check
 - V1 uses embedded YouTube playback with `start` and `end` clip offsets instead of locally extracting media.
 - Because the app is designed for local intranet use, it currently runs over HTTP.
 - The pack editor validates JSON and helps author packs, but committed JSON files remain the source of truth.
+
+
+## Latest gameplay enhancements
+
+- Admin can now leave join-key enforcement disabled by default and only turn it on when needed.
+- Admin can limit a session to a random subset of questions using a max-question setting.
+- Player UI is intended to switch into a cleaner joined-player lobby/game view after login.
+- Pack JSON uses the root `title` as the playlist name, and questions can define `displayMode` values such as `audio_only` or `video_visible`.
+- The pack editor is intended to support both pasted JSON and uploaded `.json` files, plus an AI prompt template for generating the final pack format directly.

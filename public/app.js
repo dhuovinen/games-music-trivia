@@ -4,25 +4,43 @@ const state = {
   socket: null,
   server: null,
   error: '',
+  toast: '',
   hostName: 'Host',
   playerName: '',
   sessionKeyInput: '',
   editorText: '',
   validation: null,
-  toast: '',
-  timerInterval: null
+  selectedUploadName: ''
 };
+
+const AI_PROMPT_TEMPLATE = `Generate a valid music-trivia quiz pack as strict JSON only. Do not include markdown fences or commentary.
+
+Requirements:
+- Root fields required: packId, title, description, theme, artistFocus, decade, era, genre, questions.
+- The root title is the playlist/pack display name shown in the app.
+- questions must be an array.
+- Every question must include: id, type, prompt, youtubeUrl, startSeconds, endSeconds, options, correctIndex.
+- type must be one of: artist, song, artist_song.
+- options must contain exactly 4 answer strings.
+- correctIndex must be 0, 1, 2, or 3.
+- Clip duration must not exceed 10 seconds.
+- displayMode can be audio_only or video_visible. Default preferred value is audio_only.
+- mediaMode can be audio or video.
+- Include three incorrect answers and one correct answer for each question.
+
+Create a pack for: {{REQUEST}}
+Use a fun but concise description and ensure all ids are unique.`;
 
 function connectSocket() {
   if (state.socket) return;
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(`${protocol}://${location.host}/ws`);
-  socket.addEventListener('message', (event) => {
+  socket.addEventListener('message', async (event) => {
     const message = JSON.parse(event.data);
     if (message.type === 'state') {
       state.server = message.payload;
       if (!state.editorText && message.payload.packs[0]) {
-        loadPackIntoEditor(message.payload.packs[0].packId);
+        await loadPackIntoEditor(message.payload.packs[0].packId);
       }
       render();
     }
@@ -48,6 +66,7 @@ async function loadPackIntoEditor(packId) {
   const response = await fetch(`/api/packs/${encodeURIComponent(packId)}`);
   const data = await response.json();
   state.editorText = JSON.stringify(data.pack, null, 2);
+  state.selectedUploadName = `${data.pack.title || packId}.json`;
   render();
 }
 
@@ -88,6 +107,48 @@ function youtubeEmbedUrl(media) {
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }
 
+function maskedMediaFrame(questionNumber, media) {
+  return `
+    <div class="masked-media-frame">
+      <div class="masked-media-label">Question ${questionNumber}</div>
+      <div class="masked-media-subtitle">Audio-only masked playback</div>
+      <div class="hidden-media-player" aria-hidden="true">
+        <iframe
+          src="${youtubeEmbedUrl(media)}"
+          title="Hidden trivia audio"
+          allow="autoplay; encrypted-media"
+          referrerpolicy="strict-origin-when-cross-origin"
+          tabindex="-1">
+        </iframe>
+      </div>
+    </div>
+  `;
+}
+
+function visibleMediaFrame(media) {
+  return `
+    <div class="media-frame ${media.mediaMode === 'audio' ? 'audio-mode' : ''}">
+      <iframe
+        src="${youtubeEmbedUrl(media)}"
+        title="Music trivia media"
+        allow="autoplay; encrypted-media"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen>
+      </iframe>
+    </div>
+  `;
+}
+
+function questionMedia(server, question) {
+  if (!question.media) {
+    return '<div class="host-note">Media is currently playing on the shared host screen.</div>';
+  }
+  if (question.media.displayMode === 'audio_only') {
+    return maskedMediaFrame(server.currentQuestionIndex + 1, question.media);
+  }
+  return visibleMediaFrame(question.media);
+}
+
 function questionCard(server, isHost) {
   const question = server.question;
   if (!question) return '<p class="muted">Waiting for the host to start.</p>';
@@ -108,17 +169,7 @@ function questionCard(server, isHost) {
         </div>
         <div class="timer">${timer}s</div>
       </div>
-      ${question.media ? `
-        <div class="media-frame ${question.media.mediaMode === 'audio' ? 'audio-mode' : ''}">
-          <iframe
-            src="${youtubeEmbedUrl(question.media)}"
-            title="Music trivia media"
-            allow="autoplay; encrypted-media"
-            referrerpolicy="strict-origin-when-cross-origin"
-            allowfullscreen>
-          </iframe>
-        </div>
-      ` : '<div class="host-note">Media is currently playing on the shared host screen.</div>'}
+      ${questionMedia(server, question)}
       <div class="answers-grid">${options}</div>
     </section>
   `;
@@ -154,11 +205,12 @@ function hostView() {
   const server = state.server;
   if (!server) return loading();
   const selectedPack = server.selectedPack;
+  const effectiveQuestionCount = server.totalQuestions || (selectedPack ? selectedPack.questionCount : 0);
   return `
     <div class="layout">
       <section class="sidebar panel">
         <h1>Host console</h1>
-        <p class="muted">Share session key <strong>${server.sessionKey}</strong> with up to 8 players.</p>
+        <p class="muted">${server.settings.requireJoinKey ? `Share session key <strong>${server.sessionKey}</strong> with up to 8 players.` : 'Join key is disabled. Players can enter the lobby with only a unique nickname.'}</p>
         <label>Host name<input value="${escapeHtml(state.hostName)}" oninput="state.hostName=this.value"></label>
         <button onclick="joinHost()">Become host</button>
         <label>Quiz pack
@@ -167,9 +219,20 @@ function hostView() {
           </select>
         </label>
         <div class="toggle-group">
-          <label><input type="radio" name="playback" ${server.settings.playbackMode === 'host_shared' ? 'checked' : ''} onchange="updatePlayback('host_shared')"> Shared host media</label>
-          <label><input type="radio" name="playback" ${server.settings.playbackMode === 'player_device' ? 'checked' : ''} onchange="updatePlayback('player_device')"> Player device media</label>
-          <label><input type="checkbox" ${server.settings.showLeaderboardAfterEach ? 'checked' : ''} onchange="toggleLeaderboard(this.checked)"> Show leaderboard after every question</label>
+          <label><input type="radio" name="playback" ${server.settings.playbackMode === 'host_shared' ? 'checked' : ''} onchange="updateSetting('playbackMode', 'host_shared')"> Shared host media</label>
+          <label><input type="radio" name="playback" ${server.settings.playbackMode === 'player_device' ? 'checked' : ''} onchange="updateSetting('playbackMode', 'player_device')"> Player device media</label>
+          <label><input type="checkbox" ${server.settings.showLeaderboardAfterEach ? 'checked' : ''} onchange="updateSetting('showLeaderboardAfterEach', this.checked)"> Show leaderboard after every question</label>
+          <label><input type="checkbox" ${server.settings.requireJoinKey ? 'checked' : ''} onchange="updateSetting('requireJoinKey', this.checked)"> Require join key</label>
+          <label>Max questions
+            <input type="number" min="1" max="99" value="${server.settings.maxQuestions || ''}" placeholder="Use full pack" oninput="updateSetting('maxQuestions', this.value)">
+          </label>
+          <label>Video display override
+            <select onchange="updateSetting('videoDisplayOverride', this.value)">
+              <option value="default" ${server.settings.videoDisplayOverride === 'default' ? 'selected' : ''}>Use question defaults</option>
+              <option value="hide_video" ${server.settings.videoDisplayOverride === 'hide_video' ? 'selected' : ''}>Force masked audio-only</option>
+              <option value="show_video" ${server.settings.videoDisplayOverride === 'show_video' ? 'selected' : ''}>Force visible video when possible</option>
+            </select>
+          </label>
         </div>
         <div class="actions">
           <button class="primary" onclick="startGame()" ${server.role !== 'host' || server.status !== 'lobby' || !server.players.length ? 'disabled' : ''}>Start game</button>
@@ -187,32 +250,73 @@ function hostView() {
           <h2>${selectedPack ? escapeHtml(selectedPack.title) : 'No pack selected'}</h2>
           <p>${selectedPack ? escapeHtml(selectedPack.description) : 'Load a pack from the repository to begin.'}</p>
           ${selectedPack ? `<p class="muted">Theme: ${escapeHtml(selectedPack.theme)} · Artist: ${escapeHtml(selectedPack.artistFocus)} · ${escapeHtml(selectedPack.decade)} · ${escapeHtml(selectedPack.genre)}</p>` : ''}
+          ${selectedPack ? `<p class="muted">Pack questions: ${selectedPack.questionCount} · Planned session questions: ${effectiveQuestionCount}</p>` : ''}
         </section>
         ${server.status === 'question' ? questionCard(server, true) : ''}
         ${(server.status === 'reveal' || server.status === 'finished') ? revealCard(server) : ''}
-        ${server.status === 'lobby' ? '<section class="panel"><h2>Ready check</h2><p class="muted">The host controls the only active session. Players join from their phones using the key above.</p></section>' : ''}
+        ${server.status === 'lobby' ? '<section class="panel"><h2>Ready check</h2><p class="muted">The host controls the only active session. Players join from their phones and will be cleaned into a dedicated lobby/player view once they join.</p></section>' : ''}
       </main>
     </div>
+  `;
+}
+
+function playerJoinPanel(server) {
+  return `
+    <section class="panel">
+      <h1>Join game</h1>
+      <p class="muted">${server.settings.requireJoinKey ? 'Enter the session key and your nickname.' : 'Enter a unique nickname to join the lobby.'}</p>
+      ${server.settings.requireJoinKey ? `<label>Session key<input value="${escapeHtml(state.sessionKeyInput)}" oninput="state.sessionKeyInput=this.value"></label>` : ''}
+      <label>Nickname<input value="${escapeHtml(state.playerName)}" oninput="state.playerName=this.value"></label>
+      <button class="primary" onclick="joinPlayer()">Join as player</button>
+    </section>
+  `;
+}
+
+function joinedPlayerPanel(server) {
+  return `
+    <section class="panel">
+      <div class="joined-player-head">
+        <div>
+          <h1>${escapeHtml(server.me.name)}</h1>
+          <p class="muted">Current score</p>
+        </div>
+        <div class="hero-score">${formatScore(server.me.score)}</div>
+      </div>
+      ${server.status === 'lobby' ? '<p class="muted">You are in the lobby. You can leave and rejoin before the host starts the game.</p>' : ''}
+      ${server.status === 'lobby' ? '<button onclick="leaveLobby()">Leave lobby</button>' : ''}
+    </section>
   `;
 }
 
 function playerView() {
   const server = state.server;
   if (!server) return loading();
+  const hasJoined = !!server.me;
   return `
     <div class="phone-shell">
-      <section class="panel">
-        <h1>Join game</h1>
-        <p class="muted">Enter the shared session key and your nickname.</p>
-        <label>Session key<input value="${escapeHtml(state.sessionKeyInput)}" oninput="state.sessionKeyInput=this.value"></label>
-        <label>Nickname<input value="${escapeHtml(state.playerName)}" oninput="state.playerName=this.value"></label>
-        <button class="primary" onclick="joinPlayer()">Join as player</button>
-      </section>
-      ${server.me ? `<section class="panel"><h2>${escapeHtml(server.me.name)}</h2><p class="muted">Current score</p><div class="hero-score">${formatScore(server.me.score)}</div></section>` : ''}
-      ${server.status === 'lobby' ? `<section class="panel"><h2>Lobby</h2><p class="muted">Waiting for ${escapeHtml(server.hostName)} to start the game.</p>${lobbyPlayers(server)}</section>` : ''}
-      ${server.status === 'question' ? questionCard(server, false) : ''}
-      ${(server.status === 'reveal' || server.status === 'finished') ? revealCard(server) : ''}
+      ${hasJoined ? joinedPlayerPanel(server) : playerJoinPanel(server)}
+      ${hasJoined && server.status === 'lobby' ? `<section class="panel"><h2>Lobby</h2><p class="muted">Waiting for ${escapeHtml(server.hostName)} to start the game.</p>${lobbyPlayers(server)}</section>` : ''}
+      ${hasJoined && server.status === 'question' ? questionCard(server, false) : ''}
+      ${hasJoined && (server.status === 'reveal' || server.status === 'finished') ? revealCard(server) : ''}
     </div>
+  `;
+}
+
+function editorDocsPanel() {
+  return `
+    <section class="panel docs-panel">
+      <h2>Pack format guide</h2>
+      <p class="muted">The playlist name shown in the app comes from the root <code>title</code> field. The root <code>packId</code> is the stable internal identifier.</p>
+      <ul class="doc-list">
+        <li><strong>Required root fields:</strong> <code>packId</code>, <code>title</code>, <code>description</code>, <code>theme</code>, <code>artistFocus</code>, <code>decade</code>, <code>era</code>, <code>genre</code>, <code>questions</code></li>
+        <li><strong>Required question fields:</strong> <code>id</code>, <code>type</code>, <code>prompt</code>, <code>youtubeUrl</code>, <code>startSeconds</code>, <code>endSeconds</code>, <code>options</code>, <code>correctIndex</code></li>
+        <li><strong>Optional question fields:</strong> <code>mediaMode</code> (<code>audio</code> or <code>video</code>) and <code>displayMode</code> (<code>audio_only</code> or <code>video_visible</code>)</li>
+        <li><strong>Question rules:</strong> 4 options exactly, 1 correct answer, clip duration max 10 seconds, type must be <code>artist</code>, <code>song</code>, or <code>artist_song</code>.</li>
+      </ul>
+      <h3>AI prompt template</h3>
+      <p class="muted">Replace <code>{{REQUEST}}</code> with something like <em>2010s pop songs for casual players</em>.</p>
+      <textarea class="editor prompt-template" readonly>${escapeHtml(AI_PROMPT_TEMPLATE)}</textarea>
+    </section>
   `;
 }
 
@@ -223,17 +327,22 @@ function editorView() {
     <div class="editor-layout">
       <section class="panel">
         <h1>Pack editor</h1>
-        <p class="muted">Repository-backed JSON remains the source of truth. This editor validates and previews packs before you save them into <code>data/packs</code>.</p>
+        <p class="muted">Repository-backed JSON remains the source of truth. This editor validates, uploads, and previews final playable packs before you save them into <code>data/packs</code>.</p>
         <div class="editor-toolbar">
           <label>Load sample pack<select onchange="loadPackIntoEditor(this.value)">${packOptions}</select></label>
+          <label class="upload-field">Import JSON file<input type="file" accept="application/json,.json" onchange="handlePackUpload(event)"></label>
           <button onclick="validatePackJson()">Validate JSON</button>
           <button onclick="downloadPackJson()">Download JSON</button>
         </div>
+        ${state.selectedUploadName ? `<p class="muted">Current editor source: ${escapeHtml(state.selectedUploadName)}</p>` : ''}
         <textarea class="editor" oninput="state.editorText=this.value">${escapeHtml(state.editorText)}</textarea>
       </section>
-      <section class="panel">
-        <h2>Validation</h2>
-        ${state.validation ? (state.validation.valid ? '<p class="success">Pack is valid and ready for ingestion.</p>' : `<ul class="error-list">${state.validation.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`) : '<p class="muted">Run validation to see schema feedback.</p>'}
+      <section class="editor-side-stack">
+        <section class="panel">
+          <h2>Validation</h2>
+          ${state.validation ? (state.validation.valid ? '<p class="success">Pack is valid and ready for ingestion.</p>' : `<ul class="error-list">${state.validation.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`) : '<p class="muted">Run validation or upload a JSON file to see schema feedback.</p>'}
+        </section>
+        ${editorDocsPanel()}
       </section>
     </div>
   `;
@@ -255,9 +364,9 @@ function render() {
     ${state.toast ? `<div class="flash success">${escapeHtml(state.toast)}</div>` : ''}
     ${state.view === 'welcome' ? `
       <section class="hero panel">
-        <span class="badge">Version 1</span>
+        <span class="badge">Version 1+</span>
         <h1>Kahoot-style music trivia for a local intranet</h1>
-        <p>Single-host, single-session gameplay for up to 8 players, with YouTube-sourced 10-second clips, synchronized answer windows, optional per-question leaderboards, and JSON-backed quiz packs.</p>
+        <p>Single-host, single-session gameplay for up to 8 players, with YouTube-sourced 10-second clips, masked audio-first playback, optional join-key validation, random session subsets, and JSON-backed quiz packs.</p>
         <div class="hero-actions">
           <button class="primary" onclick="changeView('host')">Open host console</button>
           <button onclick="changeView('player')">Join from a phone</button>
@@ -288,12 +397,10 @@ function setPack(packId) {
   send('set_pack', { packId });
 }
 
-function updatePlayback(playbackMode) {
-  send('update_settings', { playbackMode, showLeaderboardAfterEach: state.server.settings.showLeaderboardAfterEach });
-}
-
-function toggleLeaderboard(showLeaderboardAfterEach) {
-  send('update_settings', { playbackMode: state.server.settings.playbackMode, showLeaderboardAfterEach });
+function updateSetting(name, value) {
+  if (!state.server) return;
+  const settings = { ...state.server.settings, [name]: value };
+  send('update_settings', settings);
 }
 
 function startGame() {
@@ -312,22 +419,38 @@ function resetLobby() {
   send('reset_lobby');
 }
 
+function leaveLobby() {
+  send('leave_lobby');
+}
+
 function answerQuestion(optionIndex) {
   send('submit_answer', { optionIndex });
 }
 
 async function validatePackJson() {
-  const response = await fetch('/api/validate-pack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: state.editorText });
+  const response = await fetch('/api/validate-pack', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: state.editorText
+  });
   state.validation = await response.json();
   state.toast = state.validation.valid ? 'Validation passed.' : '';
   render();
+}
+
+async function handlePackUpload(event) {
+  const [file] = event.target.files || [];
+  if (!file) return;
+  state.selectedUploadName = file.name;
+  state.editorText = await file.text();
+  await validatePackJson();
 }
 
 function downloadPackJson() {
   const blob = new Blob([state.editorText], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = 'music-pack.json';
+  link.download = state.selectedUploadName || 'music-pack.json';
   link.click();
   URL.revokeObjectURL(link.href);
 }
@@ -339,13 +462,14 @@ window.changeView = changeView;
 window.joinHost = joinHost;
 window.joinPlayer = joinPlayer;
 window.setPack = setPack;
-window.updatePlayback = updatePlayback;
-window.toggleLeaderboard = toggleLeaderboard;
+window.updateSetting = updateSetting;
 window.startGame = startGame;
 window.skipQuestion = skipQuestion;
 window.endSession = endSession;
 window.resetLobby = resetLobby;
+window.leaveLobby = leaveLobby;
 window.answerQuestion = answerQuestion;
 window.validatePackJson = validatePackJson;
 window.downloadPackJson = downloadPackJson;
 window.loadPackIntoEditor = loadPackIntoEditor;
+window.handlePackUpload = handlePackUpload;

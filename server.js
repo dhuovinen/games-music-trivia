@@ -60,6 +60,12 @@ function validatePack(pack) {
     if (!['artist', 'song', 'artist_song'].includes(question.type)) {
       errors.push(`${prefix}: type must be artist, song, or artist_song`);
     }
+    if (question.displayMode && !['audio_only', 'video_visible'].includes(question.displayMode)) {
+      errors.push(`${prefix}: displayMode must be audio_only or video_visible when provided.`);
+    }
+    if (question.mediaMode && !['audio', 'video'].includes(question.mediaMode)) {
+      errors.push(`${prefix}: mediaMode must be audio or video when provided.`);
+    }
     if (!Array.isArray(question.options) || question.options.length !== 4) {
       errors.push(`${prefix}: options must contain exactly four answers.`);
     }
@@ -116,11 +122,15 @@ const session = {
   selectedPackId: packs[0] ? packs[0].packId : null,
   settings: {
     playbackMode: 'host_shared',
-    showLeaderboardAfterEach: true
+    showLeaderboardAfterEach: true,
+    requireJoinKey: false,
+    maxQuestions: null,
+    videoDisplayOverride: 'default'
   },
   players: [],
   status: 'lobby',
   currentQuestionIndex: -1,
+  questionSet: null,
   round: null,
   reveal: null,
   timers: {
@@ -133,6 +143,21 @@ const clients = new Map();
 
 function getSelectedPack() {
   return packs.find((pack) => pack.packId === session.selectedPackId) || null;
+}
+
+function getPlannedQuestionCount() {
+  if (session.questionSet) return session.questionSet.length;
+  const pack = getSelectedPack();
+  if (!pack) return 0;
+  const maxQuestions = Number(session.settings.maxQuestions);
+  if (Number.isFinite(maxQuestions) && maxQuestions > 0) {
+    return Math.min(maxQuestions, pack.questions.length);
+  }
+  return pack.questions.length;
+}
+
+function getQuestionSet() {
+  return session.questionSet || [];
 }
 
 function publicPlayer(player) {
@@ -152,12 +177,24 @@ function buildStateFor(clientId) {
     settings: session.settings,
     players: session.players.map(publicPlayer),
     currentQuestionIndex: session.currentQuestionIndex,
-    totalQuestions: selectedPack ? selectedPack.questions.length : 0,
+    totalQuestions: getPlannedQuestionCount(),
     question: getClientQuestionState(clientId),
     reveal: session.reveal,
     packs: packs.map(getPackSummary),
     me: me ? { id: me.id, name: me.name, score: me.score } : null
   };
+}
+
+function resolveQuestionDisplayMode(question) {
+  const questionMode = question.displayMode === 'video_visible' ? 'video_visible' : 'audio_only';
+  if (session.settings.videoDisplayOverride === 'hide_video') return 'audio_only';
+  if (session.settings.videoDisplayOverride === 'show_video' && (question.mediaMode || 'video') === 'video') {
+    return 'video_visible';
+  }
+  if ((question.mediaMode || 'video') !== 'video') {
+    return 'audio_only';
+  }
+  return questionMode;
 }
 
 function getClientQuestionState(clientId) {
@@ -174,7 +211,8 @@ function getClientQuestionState(clientId) {
       youtubeUrl: question.youtubeUrl,
       startSeconds: question.startSeconds,
       endSeconds: question.endSeconds,
-      mediaMode: question.mediaMode || 'video'
+      mediaMode: question.mediaMode || 'video',
+      displayMode: resolveQuestionDisplayMode(question)
     } : null,
     startedAt: session.round.startedAt,
     durationMs: session.round.durationMs,
@@ -200,6 +238,7 @@ function resetSession(keepPlayers = true) {
   resetTimers();
   session.status = 'lobby';
   session.currentQuestionIndex = -1;
+  session.questionSet = null;
   session.round = null;
   session.reveal = null;
   if (!keepPlayers) {
@@ -213,9 +252,23 @@ function resetSession(keepPlayers = true) {
   }
 }
 
+function chooseQuestionSet(pack) {
+  const maxQuestions = Number(session.settings.maxQuestions);
+  if (!Number.isFinite(maxQuestions) || maxQuestions <= 0 || maxQuestions >= pack.questions.length) {
+    return [...pack.questions];
+  }
+  const picked = new Set();
+  while (picked.size < maxQuestions) {
+    picked.add(Math.floor(Math.random() * pack.questions.length));
+  }
+  return [...picked]
+    .sort((a, b) => a - b)
+    .map((index) => pack.questions[index]);
+}
+
 function startQuestion(index) {
-  const pack = getSelectedPack();
-  if (!pack || !pack.questions[index]) {
+  const questions = getQuestionSet();
+  if (!questions[index]) {
     endSession();
     return;
   }
@@ -223,7 +276,7 @@ function startQuestion(index) {
   session.status = 'question';
   session.currentQuestionIndex = index;
   session.reveal = null;
-  const question = pack.questions[index];
+  const question = questions[index];
   const startedAt = Date.now();
   session.players.forEach((player) => {
     player.currentAnswer = null;
@@ -276,8 +329,8 @@ function closeQuestion(skipped) {
   broadcastState();
   session.timers.reveal = setTimeout(() => {
     const nextIndex = session.currentQuestionIndex + 1;
-    const pack = getSelectedPack();
-    if (pack && nextIndex < pack.questions.length) {
+    const questions = getQuestionSet();
+    if (nextIndex < questions.length) {
       startQuestion(nextIndex);
     } else {
       endSession();
@@ -311,8 +364,12 @@ function handleAction(clientId, message) {
     case 'join_player': {
       const name = String(message.name || '').trim().slice(0, 24);
       const providedKey = String(message.sessionKey || '').trim();
-      if (providedKey !== session.key || !name) {
-        sendMessage(client.socket, { type: 'error', payload: { message: 'Invalid session key or name.' } });
+      if (!name) {
+        sendMessage(client.socket, { type: 'error', payload: { message: 'Name is required.' } });
+        return;
+      }
+      if (session.settings.requireJoinKey && providedKey !== session.key) {
+        sendMessage(client.socket, { type: 'error', payload: { message: 'Invalid session key.' } });
         return;
       }
       if (session.status !== 'lobby') {
@@ -342,16 +399,22 @@ function handleAction(clientId, message) {
     }
     case 'update_settings': {
       if (session.hostClientId !== clientId || session.status !== 'lobby') return;
+      const requestedMax = Number(message.maxQuestions);
       session.settings = {
         playbackMode: message.playbackMode === 'player_device' ? 'player_device' : 'host_shared',
-        showLeaderboardAfterEach: !!message.showLeaderboardAfterEach
+        showLeaderboardAfterEach: !!message.showLeaderboardAfterEach,
+        requireJoinKey: !!message.requireJoinKey,
+        maxQuestions: Number.isFinite(requestedMax) && requestedMax > 0 ? Math.floor(requestedMax) : null,
+        videoDisplayOverride: ['default', 'hide_video', 'show_video'].includes(message.videoDisplayOverride) ? message.videoDisplayOverride : 'default'
       };
       break;
     }
     case 'start_game': {
       if (session.hostClientId !== clientId || session.status !== 'lobby') return;
-      if (!getSelectedPack() || session.players.length === 0) return;
+      const pack = getSelectedPack();
+      if (!pack || session.players.length === 0) return;
       session.players.forEach((player) => { player.score = 0; });
+      session.questionSet = chooseQuestionSet(pack);
       startQuestion(0);
       return;
     }
@@ -374,6 +437,12 @@ function handleAction(clientId, message) {
       if (session.hostClientId !== clientId) return;
       endSession();
       return;
+    }
+    case 'leave_lobby': {
+      if (session.status !== 'lobby') return;
+      session.players = session.players.filter((player) => player.clientId !== clientId);
+      client.role = 'viewer';
+      break;
     }
     case 'reset_lobby': {
       if (session.hostClientId !== clientId) return;
